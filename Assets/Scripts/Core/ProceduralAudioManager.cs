@@ -1,21 +1,25 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace FigurineIdleGame.Core
 {
     /// <summary>
     /// Procedural audio synthesis engine. Generates ALL game audio from raw math
-    /// using <see cref="OnAudioFilterRead"/> — no audio assets are used. It mixes:
+    /// inside <see cref="OnAudioFilterRead"/> — no audio assets are used. It mixes:
     ///   * a rhythmic generative drone baseline whose pitch/shape follows the biome,
-    ///   * triggered laser firing tones (pitch-swept square/sine blend), and
-    ///   * triggered impact bursts (decaying filtered noise).
+    ///   * and a pool of polyphonic one-shot voices (laser sweeps, explosion bursts,
+    ///     impact pops and UI ticks) so many effects can sound simultaneously.
     ///
     /// OnAudioFilterRead runs on the audio thread, so the public trigger methods only
-    /// set plain numeric/bool fields that the DSP loop consumes. We keep a looping
-    /// silent AudioSource alive so Unity keeps calling the filter callback.
+    /// enqueue lightweight requests that the DSP loop drains once per audio buffer.
+    /// A looping silent AudioSource keeps Unity calling the filter callback.
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
     public class ProceduralAudioManager : MonoBehaviour
     {
+        /// <summary>Global access point so any system can request a sound.</summary>
+        public static ProceduralAudioManager Instance { get; private set; }
+
         private GameCore _core;
         private AudioSource _source;
 
@@ -23,39 +27,67 @@ namespace FigurineIdleGame.Core
 
         [Header("Master")]
         [Range(0f, 1f)] public float masterVolume = 0.5f;
+        [Range(0f, 1f)] public float sfxVolume = 0.85f;
 
-        // ----- Drone (biome baseline) -----
-        // These are written by the main thread (SetBiome) and read on the audio thread.
-        private float _droneFreq = 55f;        // root frequency (Hz)
-        private float _droneTargetFreq = 55f;
+        // ----- Drone (biome baseline) -----------------------------------------
+        // Written by the main thread (SetBiome / SetDroneFrequency), read on the
+        // audio thread. Plain fields — no references shared across threads.
+        private float _droneFreq = 55f;        // current root frequency (Hz)
+        private float _droneTargetFreq = 55f;  // glide target
         private float _droneVolume = 0.22f;
         private int _droneWaveShape = 0;       // 0 = sine, 1 = square
-        private float _droneGlitch = 0f;       // 0..1 modulation amount (cyber biome)
+        private float _droneGlitch = 0f;       // 0..1 ring-mod amount (cyber biome)
         private double _dronePhase;
         private double _dronePhase2;           // detuned layer for a thicker pad
         private double _lfoPhase;              // rhythmic pulse LFO
         private float _pulseRateHz = 1.6f;     // drone rhythm (beats/sec)
 
-        // ----- Laser voice (triggered) -----
-        private volatile bool _laserTrigger;
-        private float _laserEnv;               // 0..1 envelope
-        private double _laserPhase;
-        private float _laserFreq;
-        private float _laserFreqStart = 1400f;
-        private float _laserFreqEnd = 320f;
-        private float _laserDecay = 7.5f;      // env units/sec
+        // ----- One-shot voice pool (polyphonic) -------------------------------
+        private enum SfxType { Laser, Explosion, Impact, UITick }
 
-        // ----- Impact voice (triggered) -----
-        private volatile bool _impactTrigger;
-        private float _impactEnv;
-        private float _impactDecay = 9.0f;
-        private double _impactPhase;
-        private float _impactTone = 90f;       // low body tone for the burst
-        private uint _noiseState = 0x1234567u;  // xorshift RNG state (audio-thread safe)
+        private struct Voice
+        {
+            public bool active;
+            public SfxType type;
+            public double phase;
+            public float freq;       // current frequency (Hz)
+            public float freqStart;  // sweep start (env == 1)
+            public float freqEnd;    // sweep end   (env == 0)
+            public float env;        // 1 -> 0 amplitude envelope
+            public float decayPerSec;// envelope units consumed per second
+            public float gain;       // peak mix gain
+        }
+
+        private const int VoiceCount = 24;
+        private Voice[] _voices;
+
+        // Thread-safe trigger queue (main thread enqueues, audio thread drains).
+        private readonly Queue<SfxType> _pending = new Queue<SfxType>(32);
+        private readonly object _queueLock = new object();
+
+        // xorshift32 RNG state for allocation-free white noise on the audio thread.
+        private uint _noiseState = 0x1234567u;
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this)
+            {
+                Destroy(this);
+                return;
+            }
+            Instance = this;
+            _voices = new Voice[VoiceCount];
+        }
 
         public void Initialize(GameCore core)
         {
             _core = core;
+            Instance = this;
+
+            if (_voices == null)
+            {
+                _voices = new Voice[VoiceCount];
+            }
 
             _source = GetComponent<AudioSource>();
             if (_source == null)
@@ -77,22 +109,73 @@ namespace FigurineIdleGame.Core
             _source.Play();
         }
 
-        #region Public trigger / control API (main thread)
-
-        /// <summary>Fires a procedural laser tone (player / pyramid shots).</summary>
-        public void PlayLaser()
+        private void OnDestroy()
         {
-            _laserTrigger = true;
+            if (Instance == this)
+            {
+                Instance = null;
+            }
         }
 
-        /// <summary>Fires a procedural impact burst (hits, kills, dashes).</summary>
-        public void PlayImpact()
+        #region Public trigger / control API (main thread)
+
+        /// <summary>
+        /// Sharp laser tone: frequency sweep from 800Hz down to 200Hz over ~0.15s.
+        /// </summary>
+        public void PlayLaserTone()
         {
-            _impactTrigger = true;
+            Enqueue(SfxType.Laser);
         }
 
         /// <summary>
-        /// Sets the generative drone baseline parameters for the active biome.
+        /// White-noise explosion burst with a fast-decaying envelope (~0.2s).
+        /// </summary>
+        public void PlayExplosionBurst()
+        {
+            Enqueue(SfxType.Explosion);
+        }
+
+        /// <summary>
+        /// Short impact click/pop: pitch drop 150Hz -> 50Hz over ~0.08s.
+        /// </summary>
+        public void PlayImpactSound()
+        {
+            Enqueue(SfxType.Impact);
+        }
+
+        /// <summary>
+        /// High-pitched UI blip (1200Hz, ~0.05s) for menu / interface feedback.
+        /// </summary>
+        public void PlayUITick()
+        {
+            Enqueue(SfxType.UITick);
+        }
+
+        // ----- Backwards-compatible aliases used by other Phase 2 systems -----
+
+        /// <summary>Alias for <see cref="PlayLaserTone"/> (player / pyramid shots).</summary>
+        public void PlayLaser()
+        {
+            Enqueue(SfxType.Laser);
+        }
+
+        /// <summary>Alias for <see cref="PlayImpactSound"/> (hits, kills, dashes).</summary>
+        public void PlayImpact()
+        {
+            Enqueue(SfxType.Impact);
+        }
+
+        /// <summary>
+        /// Sets only the generative drone root frequency. Called by the BiomeManager
+        /// when a biome shift should retune the background baseline.
+        /// </summary>
+        public void SetDroneFrequency(float freq)
+        {
+            _droneTargetFreq = Mathf.Max(20f, freq);
+        }
+
+        /// <summary>
+        /// Sets the full generative drone baseline parameters for the active biome.
         /// </summary>
         /// <param name="rootFreq">Drone root frequency in Hz.</param>
         /// <param name="waveShape">0 = sine, 1 = square.</param>
@@ -108,6 +191,18 @@ namespace FigurineIdleGame.Core
             _droneGlitch = Mathf.Clamp01(glitch);
         }
 
+        private void Enqueue(SfxType type)
+        {
+            lock (_queueLock)
+            {
+                // Bound the queue so a runaway caller can never grow it unbounded.
+                if (_pending.Count < 64)
+                {
+                    _pending.Enqueue(type);
+                }
+            }
+        }
+
         #endregion
 
         #region DSP (audio thread)
@@ -121,17 +216,160 @@ namespace FigurineIdleGame.Core
             return (_noiseState / (float)uint.MaxValue) * 2f - 1f;
         }
 
+        /// <summary>
+        /// Pulls every queued request and assigns it to a free voice slot. Runs once
+        /// per audio buffer so the lock is contended at most a few hundred times/sec.
+        /// </summary>
+        private void DrainPendingVoices()
+        {
+            lock (_queueLock)
+            {
+                while (_pending.Count > 0)
+                {
+                    SfxType type = _pending.Dequeue();
+                    AssignVoice(type);
+                }
+            }
+        }
+
+        private void AssignVoice(SfxType type)
+        {
+            int slot = -1;
+            float lowestEnv = float.MaxValue;
+            int lowestIdx = 0;
+
+            for (int i = 0; i < _voices.Length; i++)
+            {
+                if (!_voices[i].active)
+                {
+                    slot = i;
+                    break;
+                }
+                if (_voices[i].env < lowestEnv)
+                {
+                    lowestEnv = _voices[i].env;
+                    lowestIdx = i;
+                }
+            }
+
+            // All voices busy: steal the quietest one (voice stealing).
+            if (slot < 0)
+            {
+                slot = lowestIdx;
+            }
+
+            Voice v = new Voice { active = true, type = type, phase = 0.0, env = 1f };
+
+            switch (type)
+            {
+                case SfxType.Laser:
+                    v.freqStart = 800f;
+                    v.freqEnd = 200f;
+                    v.freq = v.freqStart;
+                    v.decayPerSec = 1f / 0.15f;
+                    v.gain = 0.33f;
+                    break;
+                case SfxType.Explosion:
+                    v.freqStart = 0f;
+                    v.freqEnd = 0f;
+                    v.freq = 0f;
+                    v.decayPerSec = 1f / 0.20f;
+                    v.gain = 0.50f;
+                    break;
+                case SfxType.Impact:
+                    v.freqStart = 150f;
+                    v.freqEnd = 50f;
+                    v.freq = v.freqStart;
+                    v.decayPerSec = 1f / 0.08f;
+                    v.gain = 0.50f;
+                    break;
+                case SfxType.UITick:
+                    v.freqStart = 1200f;
+                    v.freqEnd = 1200f;
+                    v.freq = 1200f;
+                    v.decayPerSec = 1f / 0.05f;
+                    v.gain = 0.25f;
+                    break;
+            }
+
+            _voices[slot] = v;
+        }
+
+        private float RenderVoice(ref Voice v, double sr)
+        {
+            if (!v.active)
+            {
+                return 0f;
+            }
+
+            // Linear pitch sweep keyed to the envelope (env 1 -> start, 0 -> end).
+            v.freq = Mathf.Lerp(v.freqEnd, v.freqStart, v.env);
+
+            float outSample;
+            switch (v.type)
+            {
+                case SfxType.Explosion:
+                {
+                    // Decaying white noise; env squared gives a punchier transient.
+                    float noise = NextNoise();
+                    outSample = noise * v.env * v.env * v.gain;
+                    break;
+                }
+                case SfxType.Impact:
+                {
+                    v.phase += v.freq / sr;
+                    if (v.phase > 1.0) v.phase -= 1.0;
+                    float body = Mathf.Sin((float)(v.phase * 2.0 * Mathf.PI));
+                    float noise = NextNoise();
+                    outSample = (body * 0.65f + noise * 0.35f) * v.env * v.env * v.gain;
+                    break;
+                }
+                case SfxType.UITick:
+                {
+                    v.phase += v.freq / sr;
+                    if (v.phase > 1.0) v.phase -= 1.0;
+                    float sine = Mathf.Sin((float)(v.phase * 2.0 * Mathf.PI));
+                    outSample = sine * v.env * v.gain;
+                    break;
+                }
+                default: // Laser
+                {
+                    v.phase += v.freq / sr;
+                    if (v.phase > 1.0) v.phase -= 1.0;
+                    float sine = Mathf.Sin((float)(v.phase * 2.0 * Mathf.PI));
+                    float square = v.phase < 0.5 ? 1f : -1f;
+                    outSample = Mathf.Lerp(sine, square, 0.5f) * v.env * v.gain;
+                    break;
+                }
+            }
+
+            v.env -= v.decayPerSec / (float)sr;
+            if (v.env <= 0f)
+            {
+                v.env = 0f;
+                v.active = false;
+            }
+
+            return outSample;
+        }
+
         private void OnAudioFilterRead(float[] data, int channels)
         {
+            if (_voices == null)
+            {
+                return;
+            }
+
+            DrainPendingVoices();
+
             double sr = _sampleRate;
-            double dronePhaseInc = _droneFreq / sr;
             double lfoInc = _pulseRateHz / sr;
 
             for (int n = 0; n < data.Length; n += channels)
             {
                 // Smoothly glide the drone toward the biome target frequency.
                 _droneFreq += (_droneTargetFreq - _droneFreq) * 0.0008f;
-                dronePhaseInc = _droneFreq / sr;
+                double dronePhaseInc = _droneFreq / sr;
 
                 // --- Drone baseline ---
                 _dronePhase += dronePhaseInc;
@@ -165,50 +403,16 @@ namespace FigurineIdleGame.Core
 
                 float sample = droneOsc * _droneVolume * pulse;
 
-                // --- Laser voice ---
-                if (_laserTrigger)
+                // --- One-shot voices (polyphonic mix) ---
+                float sfx = 0f;
+                for (int i = 0; i < _voices.Length; i++)
                 {
-                    _laserTrigger = false;
-                    _laserEnv = 1f;
-                    _laserFreq = _laserFreqStart;
-                    _laserPhase = 0.0;
+                    if (_voices[i].active)
+                    {
+                        sfx += RenderVoice(ref _voices[i], sr);
+                    }
                 }
-                if (_laserEnv > 0f)
-                {
-                    // Pitch sweep downwards over the envelope.
-                    _laserFreq += (_laserFreqEnd - _laserFreq) * 0.002f;
-                    _laserPhase += _laserFreq / sr;
-                    if (_laserPhase > 1.0) _laserPhase -= 1.0;
-
-                    float sine = Mathf.Sin((float)(_laserPhase * 2.0 * Mathf.PI));
-                    float square = _laserPhase < 0.5 ? 1f : -1f;
-                    float laser = Mathf.Lerp(sine, square, 0.5f) * _laserEnv * 0.35f;
-                    sample += laser;
-
-                    _laserEnv -= _laserDecay / (float)sr;
-                    if (_laserEnv < 0f) _laserEnv = 0f;
-                }
-
-                // --- Impact voice ---
-                if (_impactTrigger)
-                {
-                    _impactTrigger = false;
-                    _impactEnv = 1f;
-                    _impactPhase = 0.0;
-                }
-                if (_impactEnv > 0f)
-                {
-                    _impactPhase += _impactTone / sr;
-                    if (_impactPhase > 1.0) _impactPhase -= 1.0;
-                    float body = Mathf.Sin((float)(_impactPhase * 2.0 * Mathf.PI));
-                    float noise = NextNoise();
-                    // Body-heavy at the start, noisy crack on the attack.
-                    float impact = (body * 0.6f + noise * 0.4f) * _impactEnv * _impactEnv * 0.5f;
-                    sample += impact;
-
-                    _impactEnv -= _impactDecay / (float)sr;
-                    if (_impactEnv < 0f) _impactEnv = 0f;
-                }
+                sample += sfx * sfxVolume;
 
                 // Master + soft clip.
                 sample *= masterVolume;

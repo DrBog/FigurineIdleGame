@@ -29,6 +29,7 @@ namespace FigurineIdleGame.Core
         public Color PlatformColor;
         public Color BackgroundColor;
         public Color BorderColor;
+        public Color AmbientLightColor;      // scene ambient tint for this biome.
 
         // Per-archetype enemy tints.
         public Color CubeColor;
@@ -138,6 +139,7 @@ namespace FigurineIdleGame.Core
                 SphereColor = new Color(0.40f, 0.85f, 0.62f, 1f),
                 PyramidColor = new Color(0.62f, 0.92f, 0.55f, 1f),
                 FlashColor = new Color(0.55f, 1f, 0.78f, 1f),
+                AmbientLightColor = new Color(0.30f, 0.42f, 0.34f, 1f),
                 SpawnCadenceMultiplier = 1.25f,
                 EnemySpeedMultiplier = 0.9f,
                 FireRateMultiplier = 1.2f,
@@ -160,6 +162,7 @@ namespace FigurineIdleGame.Core
                 SphereColor = new Color(0.96f, 0.78f, 0.32f, 1f),
                 PyramidColor = new Color(1f, 0.88f, 0.50f, 1f),
                 FlashColor = new Color(1f, 0.84f, 0.42f, 1f),
+                AmbientLightColor = new Color(0.46f, 0.38f, 0.22f, 1f),
                 SpawnCadenceMultiplier = 0.85f,
                 EnemySpeedMultiplier = 1.15f,
                 FireRateMultiplier = 0.95f,
@@ -182,6 +185,7 @@ namespace FigurineIdleGame.Core
                 SphereColor = new Color(0.62f, 0.34f, 0.98f, 1f),
                 PyramidColor = new Color(0.95f, 0.30f, 0.90f, 1f),
                 FlashColor = new Color(0.40f, 0.95f, 1f, 1f),
+                AmbientLightColor = new Color(0.30f, 0.22f, 0.52f, 1f),
                 SpawnCadenceMultiplier = 0.7f,
                 EnemySpeedMultiplier = 1.25f,
                 FireRateMultiplier = 0.7f,
@@ -204,6 +208,7 @@ namespace FigurineIdleGame.Core
                 SphereColor = new Color(0.62f, 0.62f, 0.64f, 1f),
                 PyramidColor = new Color(0.85f, 0.85f, 0.88f, 1f),
                 FlashColor = new Color(0.92f, 0.92f, 0.95f, 1f),
+                AmbientLightColor = new Color(0.34f, 0.34f, 0.36f, 1f),
                 SpawnCadenceMultiplier = 1.1f,
                 EnemySpeedMultiplier = 0.78f,
                 FireRateMultiplier = 1.0f,
@@ -339,6 +344,293 @@ namespace FigurineIdleGame.Core
                     p.AudioVolume,
                     p.AudioPulseRateHz,
                     p.AudioGlitch);
+            }
+        }
+
+        // ============================================================
+        //  Phase 3 board-wipe API (Time.timeScale + camera flash quad +
+        //  tag-based enemy destruction). Used by AdvancedWaveSpawner.
+        // ============================================================
+
+        /// <summary>
+        /// Called by the wave spawner at the start of each wave. Triggers a biome
+        /// rotation + board wipe every <see cref="wavesPerBiome"/> waves.
+        /// </summary>
+        public void CheckForBiomeTransition(int waveNumber)
+        {
+            if (_core == null || waveNumber <= 1)
+            {
+                return;
+            }
+
+            if ((waveNumber - 1) % Mathf.Max(1, wavesPerBiome) == 0 && !_wipeInProgress)
+            {
+                ExecuteBoardWipe();
+            }
+        }
+
+        /// <summary>
+        /// Kicks off the kinetic DND board wipe (slow-mo freeze, camera flash,
+        /// tag-based enemy shatter, palette + audio shift). Safe to call directly.
+        /// </summary>
+        public void ExecuteBoardWipe()
+        {
+            if (!_wipeInProgress && _presets != null)
+            {
+                StartCoroutine(BoardWipeTimeScaleRoutine());
+            }
+        }
+
+        private IEnumerator BoardWipeTimeScaleRoutine()
+        {
+            _wipeInProgress = true;
+
+            // 1. Freeze: drop into slow-motion and freeze the combat layer.
+            float prevTimeScale = Time.timeScale;
+            Time.timeScale = 0.1f;
+            if (_core != null)
+            {
+                _core.SetCombatFrozen(true);
+            }
+
+            int nextIndex = (_activeIndex + 1) % _presets.Length;
+            Color flash = _presets[nextIndex].FlashColor;
+
+            // 2. Camera flash: instantiate a white quad overlay in front of the camera.
+            GameObject flashQuad = CreateCameraFlashQuad(flash);
+
+            // 3. Destroy every tagged enemy, spawning a particle burst at each.
+            DestroyAllTaggedEnemies(flash);
+
+            // 4. Hold the whiteout briefly (real time), fading the quad out.
+            float hold = 0.4f;
+            float t = 0f;
+            while (t < hold)
+            {
+                t += Time.unscaledDeltaTime;
+                if (flashQuad != null)
+                {
+                    var r = flashQuad.GetComponent<Renderer>();
+                    if (r != null)
+                    {
+                        Color c = r.material.color;
+                        c.a = Mathf.Lerp(0.92f, 0f, t / hold);
+                        SetRendererColor(r, c);
+                    }
+                }
+                yield return null;
+            }
+
+            // 5. Switch to the next biome and apply all visuals + audio.
+            _activeIndex = nextIndex;
+            ApplyBiomeVisuals();
+
+            if (flashQuad != null)
+            {
+                Destroy(flashQuad);
+            }
+
+            // 6. Restore time scale and release the combat freeze.
+            Time.timeScale = prevTimeScale <= 0f ? 1f : prevTimeScale;
+            if (_core != null)
+            {
+                _core.SetCombatFrozen(false);
+            }
+            _wipeInProgress = false;
+        }
+
+        /// <summary>
+        /// Applies the active biome's full visual + audio identity: ambient light,
+        /// environment palette, enemy repaint, and the generative drone mood.
+        /// </summary>
+        public void ApplyBiomeVisuals()
+        {
+            if (_presets == null)
+            {
+                return;
+            }
+
+            BiomePreset p = _presets[_activeIndex];
+
+            // Ambient scene light.
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = p.AmbientLightColor;
+
+            // Environment palette (platform material, borders, camera background).
+            if (_core != null)
+            {
+                _core.ApplyEnvironmentPalette(p.PlatformColor, p.BackgroundColor, p.BorderColor);
+
+                if (_core.WaveManager != null)
+                {
+                    _core.WaveManager.RepaintEnemies();
+                }
+
+                if (_core.Audio != null)
+                {
+                    _core.Audio.SetBiome(p.AudioRootFreq, p.AudioWaveShape, p.AudioVolume, p.AudioPulseRateHz, p.AudioGlitch);
+                    _core.Audio.SetDroneFrequency(p.AudioRootFreq);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates a large transparent quad parented to the main camera so it fills
+        /// the view as a kinetic flash overlay.
+        /// </summary>
+        private GameObject CreateCameraFlashQuad(Color color)
+        {
+            Camera cam = Camera.main;
+            if (cam == null)
+            {
+                return null;
+            }
+
+            GameObject quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.name = "BiomeBoardWipeQuad";
+            var col = quad.GetComponent<Collider>();
+            if (col != null)
+            {
+                Destroy(col);
+            }
+
+            quad.transform.SetParent(cam.transform, false);
+            float dist = cam.nearClipPlane + 0.25f;
+            quad.transform.localPosition = new Vector3(0f, 0f, dist);
+            quad.transform.localRotation = Quaternion.identity;
+
+            float h = 2f * dist * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            float w = h * Mathf.Max(0.1f, cam.aspect);
+            quad.transform.localScale = new Vector3(w * 1.3f, h * 1.3f, 1f);
+
+            var rend = quad.GetComponent<Renderer>();
+            Color start = new Color(color.r, color.g, color.b, 0.92f);
+            rend.material = MakeTransparentMaterial(start);
+            SetRendererColor(rend, start);
+
+            return quad;
+        }
+
+        /// <summary>
+        /// Finds all GameObjects tagged "Enemy", spawns a particle burst at each,
+        /// and destroys them. Also shatters the legacy wave manager's enemy list.
+        /// </summary>
+        private void DestroyAllTaggedEnemies(Color shardColor)
+        {
+            GameObject[] tagged;
+            try
+            {
+                tagged = GameObject.FindGameObjectsWithTag("Enemy");
+            }
+            catch (UnityException)
+            {
+                // The "Enemy" tag may not be defined in the project's TagManager.
+                tagged = new GameObject[0];
+            }
+
+            for (int i = tagged.Length - 1; i >= 0; i--)
+            {
+                if (tagged[i] == null)
+                {
+                    continue;
+                }
+                SpawnParticleBurst(tagged[i].transform.position, shardColor);
+                Destroy(tagged[i]);
+            }
+
+            // The procedural WaveManagerAlpha tracks its own enemy list separately.
+            if (_core != null && _core.WaveManager != null)
+            {
+                _core.WaveManager.ShatterAllEnemies(shardColor);
+            }
+        }
+
+        /// <summary>
+        /// Spawns a short-lived procedural particle burst at a world position.
+        /// </summary>
+        private void SpawnParticleBurst(Vector3 position, Color color)
+        {
+            var go = new GameObject("BoardWipeBurst");
+            go.transform.position = position;
+
+            var ps = go.AddComponent<ParticleSystem>();
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+            var main = ps.main;
+            main.loop = false;
+            main.duration = 0.5f;
+            main.startSpeed = 6f;
+            main.startSize = 0.4f;
+            main.startLifetime = 0.6f;
+            main.startColor = color;
+            main.useUnscaledTime = true;
+
+            var emission = ps.emission;
+            emission.rateOverTime = 0f;
+            emission.SetBursts(new ParticleSystem.Burst[] { new ParticleSystem.Burst(0f, 14) });
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius = 0.3f;
+
+            var psRenderer = go.GetComponent<ParticleSystemRenderer>();
+            if (psRenderer != null)
+            {
+                psRenderer.material = MakeTransparentMaterial(color);
+            }
+
+            ps.Play();
+            Destroy(go, 1.2f);
+        }
+
+        /// <summary>
+        /// Builds a material that renders with alpha transparency across the common
+        /// render pipelines, so the flash quad and particle bursts fade correctly.
+        /// </summary>
+        private static Material MakeTransparentMaterial(Color color)
+        {
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) shader = Shader.Find("Unlit/Transparent");
+            if (shader == null) shader = Shader.Find("Standard");
+
+            var mat = new Material(shader);
+            mat.color = color;
+            if (mat.HasProperty("_BaseColor"))
+            {
+                mat.SetColor("_BaseColor", color);
+            }
+
+            // Configure the Standard shader for alpha blending where applicable.
+            if (mat.HasProperty("_Mode"))
+            {
+                mat.SetFloat("_Mode", 3f); // Transparent
+                mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.SetInt("_ZWrite", 0);
+                mat.DisableKeyword("_ALPHATEST_ON");
+                mat.EnableKeyword("_ALPHABLEND_ON");
+                mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            }
+            if (mat.HasProperty("_Surface"))
+            {
+                mat.SetFloat("_Surface", 1f); // URP transparent surface type
+            }
+            mat.renderQueue = 3000;
+            return mat;
+        }
+
+        /// <summary>Sets a renderer's colour across pipeline colour properties.</summary>
+        private static void SetRendererColor(Renderer rend, Color color)
+        {
+            if (rend == null)
+            {
+                return;
+            }
+            rend.material.color = color;
+            if (rend.material.HasProperty("_BaseColor"))
+            {
+                rend.material.SetColor("_BaseColor", color);
             }
         }
 
