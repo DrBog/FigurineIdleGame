@@ -111,7 +111,7 @@ namespace FigurineIdleGame.Core
 
         private void EnsureLighting()
         {
-            if (FindObjectOfType<Light>() == null)
+            if (FindAnyObjectByType<Light>() == null)
             {
                 var lightObj = new GameObject("DirectionalLight");
                 var light = lightObj.AddComponent<Light>();
@@ -190,7 +190,7 @@ namespace FigurineIdleGame.Core
 
         private void EnsureEventSystem()
         {
-            if (FindObjectOfType<UnityEngine.EventSystems.EventSystem>() == null)
+            if (FindAnyObjectByType<UnityEngine.EventSystems.EventSystem>() == null)
             {
                 var es = new GameObject("EventSystem");
                 es.AddComponent<UnityEngine.EventSystems.EventSystem>();
