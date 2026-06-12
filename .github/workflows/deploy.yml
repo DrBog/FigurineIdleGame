@@ -1,0 +1,32 @@
+name: WebGL Cloud Builder
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    name: Unity WebGL Compilation Factory
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Cache Unity Sub-Library Packages
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-WebGL
+
+      - name: Execute Unity WebGL Compiler
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          targetPlatform: WebGL
+
+      - name: Deploy Live Sandbox Package
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: build/WebGL/WebGL
+          branch: gh-pages
