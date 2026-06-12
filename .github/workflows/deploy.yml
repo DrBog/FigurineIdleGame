@@ -47,7 +47,7 @@ jobs:
               <div id="mainMenu" class="screen">
                   <h1>FIGURINE IDLE</h1>
                   <div class="subtitle">FOUNDATION ALPHA V1 // CORE NODE</div>
-                  <button class="btn" onclick="startGame()">START RUN</button>
+                  <button class="btn" onclick="beginRun()">START RUN</button>
                   <button class="btn secondary" onclick="alert('Lab Locked: Requires Phase 5 PlayerPrefs Core Meta-Telemetry Storage.')">UPGRADE LAB</button>
               </div>
 
@@ -101,15 +101,19 @@ jobs:
               window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
               function resizeCanvas() {
-                  canvas.width = canvas.offsetWidth;
-                  canvas.height = canvas.offsetHeight;
-                  if (gameState === 'MENU') {
+                  const container = canvas.parentElement;
+                  const rect = container.getBoundingClientRect();
+                  canvas.width = rect.width > 0 ? rect.width : 450;
+                  canvas.height = rect.height > 0 ? rect.height : 850;
+                  
+                  if (gameState === 'MENU' && canvas.width > 0 && canvas.height > 0) {
                       player.x = canvas.width / 2;
                       player.y = canvas.height * 0.65;
                   }
               }
+              
               window.addEventListener('resize', resizeCanvas);
-              setTimeout(resizeCanvas, 100);
+              resizeCanvas();
 
               function handleStart(x, y) {
                   if (gameState !== 'PLAYING') return;
@@ -136,7 +140,17 @@ jobs:
               canvas.addEventListener('touchmove', e => { const r = canvas.getBoundingClientRect(); const t = e.touches[0]; handleMove(t.clientX - r.left, t.clientY - r.top); e.preventDefault(); }, {passive: false});
               window.addEventListener('touchend', handleEnd);
 
+              function beginRun() {
+                  resizeCanvas();
+                  setTimeout(startGame, 30);
+              }
+
               function startGame() {
+                  if (canvas.width === 0 || canvas.height === 0) {
+                      canvas.width = 450;
+                      canvas.height = 850;
+                  }
+                  
                   document.getElementById('mainMenu').classList.add('hidden');
                   document.getElementById('gameOverScreen').classList.add('hidden');
                   gameState = 'PLAYING';
