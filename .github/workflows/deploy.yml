@@ -376,3 +376,5 @@ jobs:
         with:
           folder: build/WebGL
           branch: gh-pages
+          folder: build/WebGL
+          branch: gh-pages
