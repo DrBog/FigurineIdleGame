@@ -89,7 +89,7 @@
             droneOsc.connect(lowpass);
             lowpass.connect(masterGain);
             droneOsc.start();
-        } catch(e) { console.log("Audio matrix lock state exception caught."); }
+        } catch(e) { console.log("Audio matrix generation state blocked."); }
     }
 
     function playSynthTone(freqStart, freqEnd, duration, type='sine', volume=1) {
@@ -161,16 +161,23 @@
     }
 
     function triggerBoardWipe() {
+        waveActive = true; // LOCK LOOP RE-ENTRY IMMEDIATELY
         isWiping = true;
         joystick.active = false;
         document.getElementById('wipeOverlay').style.opacity = '1';
         playSynthTone(150, 600, 0.4, 'triangle', 2);
         
-        enemies.forEach(e => {
-            for(let k=0; k<6; k++) {
-                particles.push({ x: e.x, y: e.y, vx: (Math.random()-0.5)*8, vy: (Math.random()-0.5)*8, life: 1.0, color: BIOMES[currentBiomeIdx].accent });
-            }
-        });
+        // Spawn visual burst particles randomly across screen matrix
+        for(let k=0; k<35; k++) {
+            particles.push({ 
+                x: Math.random() * canvas.width, 
+                y: Math.random() * canvas.height, 
+                vx: (Math.random()-0.5)*10, 
+                vy: (Math.random()-0.5)*10, 
+                life: 1.0, 
+                color: BIOMES[currentBiomeIdx].accent 
+            });
+        }
         enemies = []; enemyProjectiles = []; projectiles = [];
         
         setTimeout(() => {
@@ -178,7 +185,7 @@
             updateBiomeTheme();
             document.getElementById('wipeOverlay').style.opacity = '0';
             isWiping = false;
-            waveActive = false;
+            spawnWave(); // Launch the new wave safely inside the synchronized timeout
         }, 400);
     }
 
@@ -263,13 +270,13 @@
             }
 
             // Combat System Routines
-            if (gameState === 'PLAYING' && !isWiping) {
-                if (!waveActive && enemies.length === 0) {
+            if (gameState === 'PLAYING') {
+                if (!waveActive && enemies.length === 0 && !isWiping) {
                     if (wave > 1 && (wave - 1) % 3 === 0) { triggerBoardWipe(); } 
                     else { spawnWave(); }
                 }
 
-                if (enemies.length > 0) {
+                if (enemies.length > 0 && !isWiping) {
                     let nearest = null, minDist = Infinity;
                     enemies.forEach(e => {
                         let d = Math.sqrt((e.x - player.x)**2 + (e.y - player.y)**2);
@@ -279,7 +286,8 @@
                         player.angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
                         if (now - lastShotTime > fireRate) {
                             projectiles.push({ x: player.x, y: player.y, vx: Math.cos(player.angle) * 8, vy: Math.sin(player.angle) * 8, radius: 4 });
-                            playSynthTone(440, 220, 0.12, 'sine', 0.6);
+                            scaleTone = 440 - (currentBiomeIdx * 60);
+                            playSynthTone(scaleTone, scaleTone / 2, 0.12, 'sine', 0.6);
                             lastShotTime = now;
                         }
                     }
@@ -356,7 +364,6 @@
 
                 if (gameState === 'PLAYING' && !isWiping) {
                     if (e.type === 'CUBE') {
-                        // Tank Heavy Ram Behavior: Charge trigger burst
                         if (!e.isCharging && now - e.birth > e.chargeTimer) {
                             e.isCharging = true;
                             e.chargeTimer = now; 
@@ -368,14 +375,12 @@
                         } else { e.x += (edx / edist) * (e.speed * 0.6); e.y += (edy / edist) * (e.speed * 0.6); }
                         
                     } else if (e.type === 'SPHERE') {
-                        // Swarmer Matrix Path Weaving: Flanking Sine calculation
                         let timeFactor = (now - e.birth) * 0.004;
                         let perX = -edy / edist; let perY = edx / edist;
                         e.x += (edx / edist) * (e.speed * 1.3) + perX * Math.cos(timeFactor) * 1.5;
                         e.y += (edy / edist) * (e.speed * 1.3) + perY * Math.cos(timeFactor) * 1.5;
                         
                     } else if (e.type === 'PYRAMID') {
-                        // Sniper Logic: Target maintaining hard thresholds
                         if (edist > 180) { e.x += (edx / edist) * e.speed; e.y += (edy / edist) * e.speed; } 
                         else if (edist < 130) { e.x -= (edx / edist) * (e.speed * 1.2); e.y -= (edy / edist) * (e.speed * 1.2); }
                         
@@ -406,7 +411,7 @@
                 ctx.fillStyle = '#ff0055';
                 ctx.fillRect(e.x - 12, e.y - e.radius - 7, 24 * (e.hp / e.maxHp), 3);
 
-                // Hull Hull Collision Damage Logic
+                // Hull Collision Damage Logic
                 if (gameState === 'PLAYING' && !isWiping && edist < player.radius + e.radius) {
                     player.currentHealth = Math.max(0, player.currentHealth - (e.type === 'CUBE' ? 0.8 : 0.3));
                     if (player.currentHealth <= 0) triggerGameOver();
