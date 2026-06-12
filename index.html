@@ -17,7 +17,7 @@
         .btn:hover { background: #00ffcc; color: #000; }
         .btn.secondary { border-color: #ff007f; color: #ff007f; text-shadow: 0 0 5px #ff007f; box-shadow: 0 0 10px #ff007f; }
         .btn.secondary:hover { background: #ff007f; color: #000; }
-        #wipeOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #ffffff; opacity: 0; pointer-events: none; z-index: 5; transition: opacity 0.1s ease; }
+        #wipeOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(circle, #ffffff 0%, #ccffff 100%); opacity: 0; pointer-events: none; z-index: 5; transition: opacity 0.15s ease-out; }
     </style>
 </head>
 <body>
@@ -49,8 +49,8 @@
     let score = 0, kills = 0, wave = 1;
     let waveActive = false, distanceTraveled = 0;
     let isWiping = false;
+    let wipeScheduled = false;
 
-    // Phase 2 Biome Preset Map Engine
     const BIOMES = [
         { name: 'FOREST DIORAMA', grid: '#004d26', accent: '#00ff66', bg: '#020d06', droneFreq: 65 },
         { name: 'NEON CITY GRID', grid: '#4d3300', accent: '#ffaa00', bg: '#0d0a02', droneFreq: 73 },
@@ -68,38 +68,46 @@
     window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; initAudio(); });
     window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-    // Web Audio Synthesizer Runtime Nodes
+    // Web Audio Core Engine Optimization Nodes
     let audioCtx = null, masterGain = null, droneOsc = null;
+    
     function initAudio() {
-        if (audioCtx) return;
-        try {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            masterGain = audioCtx.createGain();
-            masterGain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-            masterGain.connect(audioCtx.destination);
-            
-            droneOsc = audioCtx.createOscillator();
-            droneOsc.type = 'sawtooth';
-            droneOsc.frequency.setValueAtTime(BIOMES[currentBiomeIdx].droneFreq, audioCtx.currentTime);
-            
-            let lowpass = audioCtx.createBiquadFilter();
-            lowpass.type = 'lowpass';
-            lowpass.frequency.setValueAtTime(110, audioCtx.currentTime);
-            
-            droneOsc.connect(lowpass);
-            lowpass.connect(masterGain);
-            droneOsc.start();
-        } catch(e) { console.log("Audio matrix generation state blocked."); }
+        if (!audioCtx) {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioCtx.createGain();
+                masterGain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+                masterGain.connect(audioCtx.destination);
+                
+                droneOsc = audioCtx.createOscillator();
+                droneOsc.type = 'sawtooth';
+                droneOsc.frequency.setValueAtTime(BIOMES[currentBiomeIdx].droneFreq, audioCtx.currentTime);
+                
+                let lowpass = audioCtx.createBiquadFilter();
+                lowpass.type = 'lowpass';
+                lowpass.frequency.setValueAtTime(110, audioCtx.currentTime);
+                
+                droneOsc.connect(lowpass);
+                lowpass.connect(masterGain);
+                droneOsc.start();
+            } catch(e) { console.log("Audio creation exception."); }
+        }
+        
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
     }
 
     function playSynthTone(freqStart, freqEnd, duration, type='sine', volume=1) {
-        if (!audioCtx) return;
+        initAudio();
+        if (!audioCtx || audioCtx.state === 'suspended') return;
+        
         let osc = audioCtx.createOscillator();
         let gainNode = audioCtx.createGain();
         osc.type = type;
         osc.frequency.setValueAtTime(freqStart, audioCtx.currentTime);
         osc.frequency.exponentialRampToValueAtTime(freqEnd, audioCtx.currentTime + duration);
-        gainNode.gain.setValueAtTime(0.15 * volume, audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0.12 * volume, audioCtx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
         osc.connect(gainNode);
         gainNode.connect(masterGain);
@@ -137,6 +145,7 @@
     window.addEventListener('touchend', handleEnd);
 
     function beginRun() { initAudio(); resizeCanvas(); setTimeout(startGame, 30); }
+    
     function startGame() {
         document.getElementById('mainMenu').classList.add('hidden');
         document.getElementById('gameOverScreen').classList.add('hidden');
@@ -145,7 +154,8 @@
         player.x = canvas.width / 2; player.y = canvas.height / 2;
         score = 0; kills = 0; wave = 1; distanceTraveled = 0; currentBiomeIdx = 0;
         enemies = []; projectiles = []; enemyProjectiles = []; particles = [];
-        waveActive = false; isWiping = false; joystick.alpha = 0;
+        waveActive = false; isWiping = false; wipeScheduled = false; joystick.alpha = 0;
+        document.getElementById('wipeOverlay').style.opacity = '0';
         updateBiomeTheme();
     }
 
@@ -157,17 +167,22 @@
         document.getElementById('startBtn').style.borderColor = b.accent;
         document.getElementById('startBtn').style.color = b.accent;
         document.getElementById('startBtn').style.boxShadow = `0 0 10px ${b.accent}`;
-        if (droneOsc && audioCtx) { droneOsc.frequency.exponentialRampToValueAtTime(b.droneFreq, audioCtx.currentTime + 0.5); }
+        if (droneOsc && audioCtx && audioCtx.state !== 'suspended') { 
+            droneOsc.frequency.exponentialRampToValueAtTime(b.droneFreq, audioCtx.currentTime + 0.5); 
+        }
     }
 
     function triggerBoardWipe() {
-        waveActive = true; // LOCK LOOP RE-ENTRY IMMEDIATELY
+        if (isWiping || wipeScheduled) return;
+        
+        wipeScheduled = true;
         isWiping = true;
         joystick.active = false;
-        document.getElementById('wipeOverlay').style.opacity = '1';
+        
+        const overlay = document.getElementById('wipeOverlay');
+        overlay.style.opacity = '1';
         playSynthTone(150, 600, 0.4, 'triangle', 2);
         
-        // Spawn visual burst particles randomly across screen matrix
         for(let k=0; k<35; k++) {
             particles.push({ 
                 x: Math.random() * canvas.width, 
@@ -178,27 +193,38 @@
                 color: BIOMES[currentBiomeIdx].accent 
             });
         }
-        enemies = []; enemyProjectiles = []; projectiles = [];
+        
+        enemies = []; 
+        enemyProjectiles = []; 
+        projectiles = [];
         
         setTimeout(() => {
             currentBiomeIdx = (currentBiomeIdx + 1) % BIOMES.length;
             updateBiomeTheme();
-            document.getElementById('wipeOverlay').style.opacity = '0';
-            isWiping = false;
-            spawnWave(); // Launch the new wave safely inside the synchronized timeout
-        }, 400);
+            
+            setTimeout(() => {
+                overlay.style.opacity = '0';
+                isWiping = false;
+                wipeScheduled = false;
+                waveActive = false;
+            }, 100);
+        }, 300);
     }
 
     function resetToMenu() {
         document.getElementById('gameOverScreen').classList.add('hidden');
         document.getElementById('mainMenu').classList.remove('hidden');
+        document.getElementById('wipeOverlay').style.opacity = '0';
         gameState = 'MENU';
         currentBiomeIdx = 0;
+        isWiping = false;
+        wipeScheduled = false;
         updateBiomeTheme();
         resizeCanvas();
     }
 
     function triggerGameOver() {
+        if (gameState === 'GAMEOVER') return;
         gameState = 'GAMEOVER';
         playSynthTone(100, 40, 0.8, 'sawtooth', 1.5);
         document.getElementById('finalScore').innerText = `WAVES SURVIVED: ${wave - 1} // ELIMINATIONS: ${kills}`;
@@ -206,6 +232,8 @@
     }
 
     function spawnWave() {
+        if (isWiping) return;
+        
         let count = 4 + (wave * 2);
         for (let i = 0; i < count; i++) {
             let angle = Math.random() * Math.PI * 2;
@@ -232,7 +260,6 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         let now = Date.now();
 
-        // Structural Matrix Grid Rendering
         ctx.strokeStyle = currentBiome.grid;
         ctx.lineWidth = 1;
         for (let x = 0; x < canvas.width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
@@ -243,7 +270,6 @@
         if (gameState === 'PLAYING' || gameState === 'MENU') {
             if (!joystick.active && now - joystick.lastInputTime > 2000) { joystick.alpha = Math.max(0, joystick.alpha - 0.02); }
 
-            // Input Vector Translation Tracking
             let moveX = 0, moveY = 0;
             if (joystick.active && !isWiping) {
                 let dx = joystick.currentX - joystick.startX;
@@ -269,11 +295,13 @@
                 distanceTraveled += player.speed;
             }
 
-            // Combat System Routines
             if (gameState === 'PLAYING') {
-                if (!waveActive && enemies.length === 0 && !isWiping) {
-                    if (wave > 1 && (wave - 1) % 3 === 0) { triggerBoardWipe(); } 
-                    else { spawnWave(); }
+                if (!waveActive && enemies.length === 0 && !isWiping && !wipeScheduled) {
+                    if (wave > 0 && wave % 3 === 0) { 
+                        triggerBoardWipe(); 
+                    } else { 
+                        spawnWave(); 
+                    }
                 }
 
                 if (enemies.length > 0 && !isWiping) {
@@ -286,7 +314,7 @@
                         player.angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
                         if (now - lastShotTime > fireRate) {
                             projectiles.push({ x: player.x, y: player.y, vx: Math.cos(player.angle) * 8, vy: Math.sin(player.angle) * 8, radius: 4 });
-                            scaleTone = 440 - (currentBiomeIdx * 60);
+                            let scaleTone = 440 - (currentBiomeIdx * 60);
                             playSynthTone(scaleTone, scaleTone / 2, 0.12, 'sine', 0.6);
                             lastShotTime = now;
                         }
@@ -294,7 +322,6 @@
                 }
             } else { player.angle += 0.008; }
 
-            // Render Player Primitive Structure Stack
             ctx.save();
             ctx.translate(player.x, player.y);
             ctx.rotate(player.angle);
@@ -310,7 +337,6 @@
             ctx.closePath(); ctx.fill();
             ctx.restore();
 
-            // Player Projectile Processing Array Execution Loop
             for (let i = projectiles.length - 1; i >= 0; i--) {
                 let p = projectiles[i]; p.x += p.vx; p.y += p.vy;
                 ctx.fillStyle = '#ffff00'; ctx.shadowBlur = 6; ctx.shadowColor = '#ffff00';
@@ -340,7 +366,6 @@
                 }
             }
 
-            // Enemy Projectile Processing Trajectory Updates
             for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
                 let ep = enemyProjectiles[i]; ep.x += ep.vx; ep.y += ep.vy;
                 ctx.fillStyle = '#ff0055'; ctx.shadowBlur = 6; ctx.shadowColor = '#ff0055';
@@ -357,7 +382,6 @@
                 }
             }
 
-            // Distinct Phase 2 Divergent AI Pathfinding Behaviors
             enemies.forEach(e => {
                 let edx = player.x - e.x; let edy = player.y - e.y;
                 let edist = Math.sqrt(edx*edx + edy*edy);
@@ -392,7 +416,6 @@
                     }
                 }
 
-                // Render Segmented Outlines By Target Class Type
                 ctx.fillStyle = e.type === 'CUBE' ? '#ff3333' : (e.type === 'SPHERE' ? '#ffaa00' : '#00bfff');
                 ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8;
                 ctx.beginPath();
@@ -405,20 +428,17 @@
                 }
                 ctx.fill();
 
-                // Enemy HP Indicator Overlay Array
                 ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,0.15)';
                 ctx.fillRect(e.x - 12, e.y - e.radius - 7, 24, 3);
                 ctx.fillStyle = '#ff0055';
                 ctx.fillRect(e.x - 12, e.y - e.radius - 7, 24 * (e.hp / e.maxHp), 3);
 
-                // Hull Collision Damage Logic
                 if (gameState === 'PLAYING' && !isWiping && edist < player.radius + e.radius) {
                     player.currentHealth = Math.max(0, player.currentHealth - (e.type === 'CUBE' ? 0.8 : 0.3));
                     if (player.currentHealth <= 0) triggerGameOver();
                 }
             });
 
-            // Secondary Particle Processing Burst Loop
             for (let i = particles.length - 1; i >= 0; i--) {
                 let p = particles[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.03;
                 if (p.life <= 0) { particles.splice(i, 1); continue; }
@@ -427,7 +447,6 @@
                 ctx.globalAlpha = 1.0;
             }
 
-            // Interface Virtual Input Handle Joystick Overlay
             if (joystick.alpha > 0) {
                 ctx.save(); ctx.globalAlpha = joystick.alpha; ctx.shadowBlur = 0;
                 ctx.strokeStyle = currentBiome.accent; ctx.lineWidth = 2;
@@ -440,7 +459,6 @@
                 ctx.restore();
             }
 
-            // Dynamic HUD Text Overlay System Matrix
             if (gameState === 'PLAYING') {
                 ctx.shadowBlur = 0; ctx.fillStyle = currentBiome.accent; ctx.font = 'bold 12px monospace';
                 ctx.fillText(`BIOME: ${currentBiome.name}`, 15, 25);
