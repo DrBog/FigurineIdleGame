@@ -1,4 +1,5 @@
 using UnityEngine;
+using Unity.Cinemachine;
 
 namespace FigurineIdleGame.Core
 {
@@ -168,6 +169,65 @@ namespace FigurineIdleGame.Core
             playerObj.transform.position = new Vector3(0f, 1.25f, 0f);
             Player = playerObj.AddComponent<PlayerController>();
             Player.Initialize(this);
+
+            // Bind the tracking camera to the procedurally generated player the instant its
+            // GameObject exists, guaranteeing smooth follow/look-at from frame 1.
+            LinkEngineCamera(playerObj);
+        }
+
+        /// <summary>
+        /// Binds a Cinemachine v3 <see cref="CinemachineCamera"/> to the supplied player object so
+        /// the virtual camera follows and looks at the procedurally generated player transform.
+        /// If no Cinemachine camera exists in the scene, one is created on the fly. This is invoked
+        /// the exact moment the player geometry is instantiated, ensuring the camera is locked on
+        /// from the very first rendered frame.
+        /// </summary>
+        /// <param name="playerObject">The freshly instantiated player GameObject to track.</param>
+        private void LinkEngineCamera(GameObject playerObject)
+        {
+            if (playerObject == null)
+            {
+                return;
+            }
+
+            // Locate an existing Cinemachine v3 virtual camera, or spin one up if the scene has none.
+            CinemachineCamera vcam = FindFirstObjectByType<CinemachineCamera>();
+            if (vcam == null)
+            {
+                vcam = CreateCinemachineCamera();
+            }
+
+            if (vcam != null)
+            {
+                vcam.Follow = playerObject.transform;
+                vcam.LookAt = playerObject.transform;
+            }
+        }
+
+        /// <summary>
+        /// Programmatically creates a Cinemachine v3 virtual camera (and ensures the main camera
+        /// carries a <see cref="CinemachineBrain"/>) when the scene does not already provide one.
+        /// The virtual camera is positioned to mirror the angled top-down tabletop framing used by
+        /// <see cref="EnsureCamera"/>.
+        /// </summary>
+        /// <returns>The newly created <see cref="CinemachineCamera"/>.</returns>
+        private CinemachineCamera CreateCinemachineCamera()
+        {
+            // Cinemachine requires a CinemachineBrain on the rendering camera to drive transforms.
+            Camera mainCam = Camera.main;
+            if (mainCam != null && mainCam.GetComponent<CinemachineBrain>() == null)
+            {
+                mainCam.gameObject.AddComponent<CinemachineBrain>();
+            }
+
+            var vcamObj = new GameObject("CinemachineCamera");
+            // Match the angled top-down diorama framing established for the static main camera.
+            vcamObj.transform.position = new Vector3(0f, 18f, -13f);
+            vcamObj.transform.rotation = Quaternion.Euler(55f, 0f, 0f);
+
+            var vcam = vcamObj.AddComponent<CinemachineCamera>();
+            vcam.Lens.FieldOfView = 60f;
+            return vcam;
         }
 
         private void BuildCanvas()
