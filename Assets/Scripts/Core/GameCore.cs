@@ -39,8 +39,13 @@ namespace FigurineIdleGame.Core
         public HealthTracker Health { get; private set; }
         public MainMenuUI MainMenu { get; private set; }
         public VirtualJoystick Joystick { get; private set; }
+        public ProceduralAudioManager Audio { get; private set; }
+        public BiomeManager Biome { get; private set; }
 
         private Transform _platform;
+        private Renderer _platformRenderer;
+        private readonly System.Collections.Generic.List<Renderer> _borderRenderers =
+            new System.Collections.Generic.List<Renderer>();
 
         /// <summary>
         /// Zero-asset bootstrap. Creates the GameCore host object automatically
@@ -134,6 +139,7 @@ namespace FigurineIdleGame.Core
             rend.material = MakeMaterial(new Color(0.18f, 0.22f, 0.28f, 1f));
 
             _platform = platform.transform;
+            _platformRenderer = rend;
 
             // Decorative raised border so the figurines read as on a tabletop.
             CreateBorderStrip("Border_N", new Vector3(0f, 0.4f, 15f), new Vector3(30f, 1f, 0.6f));
@@ -149,7 +155,9 @@ namespace FigurineIdleGame.Core
             strip.transform.SetParent(_platform != null ? null : null);
             strip.transform.position = pos;
             strip.transform.localScale = scale;
-            strip.GetComponent<Renderer>().material = MakeMaterial(new Color(0.30f, 0.34f, 0.42f, 1f));
+            var stripRend = strip.GetComponent<Renderer>();
+            stripRend.material = MakeMaterial(new Color(0.30f, 0.34f, 0.42f, 1f));
+            _borderRenderers.Add(stripRend);
             // Borders are visual only; remove collider to avoid trapping units.
             Destroy(strip.GetComponent<Collider>());
         }
@@ -203,10 +211,22 @@ namespace FigurineIdleGame.Core
             Joystick.Initialize(this);
             Player.AttachJoystick(Joystick);
 
+            // Procedural audio synthesizer (generates its own AudioSource).
+            var audioObj = new GameObject("ProceduralAudioManager");
+            Audio = audioObj.AddComponent<ProceduralAudioManager>();
+            Audio.Initialize(this);
+
             // Wave manager (enemy spawning).
             var waveObj = new GameObject("WaveManagerAlpha");
             WaveManager = waveObj.AddComponent<WaveManagerAlpha>();
             WaveManager.Initialize(this);
+
+            // Biome matrix (palette rotation + board-wipe transitions).
+            // Built after the wave manager so it can repaint/shatter enemies, and
+            // applies the opening biome palette + audio mood on initialization.
+            var biomeObj = new GameObject("BiomeManager");
+            Biome = biomeObj.AddComponent<BiomeManager>();
+            Biome.Initialize(this);
 
             // Main menu (built last so it draws above the HUD).
             var menuObj = new GameObject("MainMenuUI");
@@ -306,6 +326,45 @@ namespace FigurineIdleGame.Core
         public void AddCurrency(int amount)
         {
             Currency = Mathf.Max(0, Currency + amount);
+        }
+
+        /// <summary>
+        /// Allows subsystems (notably the BiomeManager board-wipe) to freeze and
+        /// release the combat layer without changing the high-level GameState.
+        /// </summary>
+        public void SetCombatFrozen(bool frozen)
+        {
+            CombatFrozen = frozen;
+        }
+
+        #endregion
+
+        #region Environment Palette
+
+        /// <summary>
+        /// Repaints the diorama environment (platform, border strips, and camera
+        /// background) to the active biome palette. Invoked by the BiomeManager.
+        /// </summary>
+        public void ApplyEnvironmentPalette(Color platformColor, Color backgroundColor, Color borderColor)
+        {
+            if (_platformRenderer != null)
+            {
+                _platformRenderer.material = MakeMaterial(platformColor);
+            }
+
+            for (int i = 0; i < _borderRenderers.Count; i++)
+            {
+                if (_borderRenderers[i] != null)
+                {
+                    _borderRenderers[i].material = MakeMaterial(borderColor);
+                }
+            }
+
+            Camera cam = Camera.main;
+            if (cam != null)
+            {
+                cam.backgroundColor = backgroundColor;
+            }
         }
 
         #endregion
