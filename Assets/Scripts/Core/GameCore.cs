@@ -191,7 +191,7 @@ namespace FigurineIdleGame.Core
             }
 
             // Locate an existing Cinemachine v3 virtual camera, or spin one up if the scene has none.
-            CinemachineCamera vcam = FindFirstObjectByType<CinemachineCamera>();
+            CinemachineCamera vcam = FindAnyObjectByType<CinemachineCamera>();
             if (vcam == null)
             {
                 vcam = CreateCinemachineCamera();
