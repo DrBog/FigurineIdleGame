@@ -27,12 +27,12 @@ jobs:
               <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
               <title>Project Figurine: Phase 1 Alpha</title>
               <style>
-                  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+                  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; margin: 0; padding: 0; }
                   body { margin: 0; background: #020208; color: #00ffcc; font-family: monospace; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-                  #gameContainer { width: 100vw; height: 100vh; max-width: 450px; max-height: 850px; position: relative; border: 2px solid #00ffcc; box-shadow: 0 0 25px #00ffcc; aspect-ratio: 9/16; background: #05050f; }
+                  #gameContainer { width: 100vw; height: 100vh; max-width: 450px; max-height: 850px; position: relative; border: 2px solid #00ffcc; box-shadow: 0 0 25px #00ffcc; background: #05050f; }
                   canvas { width: 100%; height: 100%; display: block; }
-                  .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(5, 5, 15, 0.95); transition: opacity 0.4s ease; z-index: 10; }
-                  .hidden { opacity: 0; pointer-events: none; }
+                  .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(5, 5, 15, 0.95); transition: opacity 0.3s ease; z-index: 10; }
+                  .hidden { display: none !important; }
                   h1 { font-size: 28px; text-shadow: 0 0 10px #00ffcc; margin-bottom: 5px; text-align: center; }
                   .subtitle { color: #ff007f; text-shadow: 0 0 5px #ff007f; margin-bottom: 40px; font-size: 14px; }
                   .btn { padding: 16px 32px; background: none; border: 2px solid #00ffcc; color: #00ffcc; font-family: monospace; font-size: 18px; cursor: pointer; text-shadow: 0 0 5px #00ffcc; box-shadow: 0 0 10px #00ffcc; transition: 0.2s; margin: 10px 0; width: 220px; text-align: center; }
@@ -71,13 +71,12 @@ jobs:
               let waveActive = false;
               let distanceTraveled = 0;
 
-              // Telemetry System Metrics (Matching requested baseline spec rules)
               const player = {
                   x: 0, y: 0,
                   radius: 14,
                   maxHealth: 100,
                   currentHealth: 100,
-                  speed: 4.5, // Operational balanced transform translate scalar
+                  speed: 4.0,
                   damage: 25,
                   angle: 0
               };
@@ -86,59 +85,55 @@ jobs:
               let projectiles = [];
               let particles = [];
               let lastShotTime = 0;
-              const fireRate = 350; // Milliseconds between automated fire vectors
+              const fireRate = 300;
 
-              // Virtual Joystick Data Track Nodes
               const joystick = {
                   startX: 0, startY: 0,
                   currentX: 0, currentY: 0,
                   active: false,
                   alpha: 0,
                   lastInputTime: 0,
-                  maxRadius: 45
+                  maxRadius: 50
               };
+
+              let keys = {};
+              window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+              window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
               function resizeCanvas() {
                   canvas.width = canvas.offsetWidth;
                   canvas.height = canvas.offsetHeight;
                   if (gameState === 'MENU') {
                       player.x = canvas.width / 2;
-                      player.y = canvas.height * 0.7;
+                      player.y = canvas.height * 0.65;
                   }
               }
               window.addEventListener('resize', resizeCanvas);
-              resizeCanvas();
+              setTimeout(resizeCanvas, 100);
 
-              // Touch Matrix Input Hooks
               function handleStart(x, y) {
                   if (gameState !== 'PLAYING') return;
-                  joystick.startX = x;
-                  joystick.startY = y;
-                  joystick.currentX = x;
-                  joystick.currentY = y;
-                  joystick.active = true;
-                  joystick.alpha = 1.0;
+                  joystick.startX = x; joystick.startY = y;
+                  joystick.currentX = x; joystick.currentY = y;
+                  joystick.active = true; joystick.alpha = 1.0;
                   joystick.lastInputTime = Date.now();
               }
 
               function handleMove(x, y) {
                   if (!joystick.active) return;
-                  joystick.currentX = x;
-                  joystick.currentY = y;
+                  joystick.currentX = x; joystick.currentY = y;
                   joystick.lastInputTime = Date.now();
                   joystick.alpha = 1.0;
               }
 
-              function handleEnd() {
-                  joystick.active = false;
-              }
+              function handleEnd() { joystick.active = false; }
 
-              canvas.addEventListener('mousedown', e => { const rect = canvas.getBoundingClientRect(); handleStart(e.clientX - rect.left, e.clientY - rect.top); });
-              canvas.addEventListener('mousemove', e => { const rect = canvas.getBoundingClientRect(); handleMove(e.clientX - rect.left, e.clientY - rect.top); });
+              canvas.addEventListener('mousedown', e => { const r = canvas.getBoundingClientRect(); handleStart(e.clientX - r.left, e.clientY - r.top); });
+              canvas.addEventListener('mousemove', e => { const r = canvas.getBoundingClientRect(); handleMove(e.clientX - r.left, e.clientY - r.top); });
               window.addEventListener('mouseup', handleEnd);
 
-              canvas.addEventListener('touchstart', e => { const rect = canvas.getBoundingClientRect(); const t = e.touches[0]; handleStart(t.clientX - rect.left, t.clientY - rect.top); e.preventDefault(); }, {passive: false});
-              canvas.addEventListener('touchmove', e => { const rect = canvas.getBoundingClientRect(); const t = e.touches[0]; handleMove(t.clientX - rect.left, t.clientY - rect.top); e.preventDefault(); }, {passive: false});
+              canvas.addEventListener('touchstart', e => { const r = canvas.getBoundingClientRect(); const t = e.touches[0]; handleStart(t.clientX - r.left, t.clientY - r.top); e.preventDefault(); }, {passive: false});
+              canvas.addEventListener('touchmove', e => { const r = canvas.getBoundingClientRect(); const t = e.touches[0]; handleMove(t.clientX - r.left, t.clientY - r.top); e.preventDefault(); }, {passive: false});
               window.addEventListener('touchend', handleEnd);
 
               function startGame() {
@@ -148,16 +143,10 @@ jobs:
                   player.currentHealth = player.maxHealth;
                   player.x = canvas.width / 2;
                   player.y = canvas.height / 2;
-                  score = 0;
-                  kills = 0;
-                  wave = 1;
-                  distanceTraveled = 0;
-                  enemies = [];
-                  projectiles = [];
-                  particles = [];
+                  score = 0; kills = 0; wave = 1; distanceTraveled = 0;
+                  enemies = []; projectiles = []; particles = [];
                   waveActive = false;
-                  joystick.lastInputTime = Date.now();
-                  joystick.alpha = 1.0;
+                  joystick.alpha = 0;
               }
 
               function resetToMenu() {
@@ -169,109 +158,207 @@ jobs:
 
               function triggerGameOver() {
                   gameState = 'GAMEOVER';
-                  document.getElementById('finalScore').innerText = `WAVES SURVIVED: ${wave - 1} // TOTAL ELIMINATIONS: ${kills}`;
+                  document.getElementById('finalScore').innerText = `WAVES SURVIVED: ${wave - 1} // ELIMINATIONS: ${kills}`;
                   document.getElementById('gameOverScreen').classList.remove('hidden');
               }
 
               function spawnWave() {
-                  waveActive = true;
-                  let count = 5 + (wave * 3);
-                  let hpScale = 50 + (wave * 15);
+                  let count = 4 + (wave * 2);
+                  let hpScale = 40 + (wave * 10);
                   for (let i = 0; i < count; i++) {
                       let angle = Math.random() * Math.PI * 2;
                       let dist = Math.max(canvas.width, canvas.height) * 0.6;
                       enemies.push({
                           x: player.x + Math.cos(angle) * dist,
                           y: player.y + Math.sin(angle) * dist,
-                          hp: hpScale,
-                          maxHp: hpScale,
-                          speed: 1.2 + (Math.random() * 0.4) + (wave * 0.05),
+                          hp: hpScale, maxHp: hpScale,
+                          speed: 1.0 + (wave * 0.05),
                           type: Math.random() > 0.5 ? 'CUBE' : 'SPHERE',
-                          radius: Math.random() > 0.7 ? 16 : 10 // Basic scale variations
+                          radius: 12
                       });
                   }
+                  waveActive = true;
               }
 
-              // Engine Execution Main Update Loop
               function loop() {
                   ctx.clearRect(0, 0, canvas.width, canvas.height);
                   let now = Date.now();
 
-                  // 1. Draw Geometric Diorama Grid Blueprint
-                  ctx.strokeStyle = '#11112a';
+                  // Grid Renderer
+                  ctx.strokeStyle = '#111128';
                   ctx.lineWidth = 1;
-                  let gridSize = 40;
-                  for (let x = 0; x < canvas.width; x += gridSize) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
-                  for (let y = 0; y < canvas.height; y += gridSize) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
+                  for (let x = 0; x < canvas.width; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke(); }
+                  for (let y = 0; y < canvas.height; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke(); }
 
                   if (gameState === 'PLAYING' || gameState === 'MENU') {
-                      // Update Joystick Decay Matrix
                       if (!joystick.active && now - joystick.lastInputTime > 2000) {
-                          joystick.alpha = Math.max(0, joystick.alpha - 0.05);
+                          joystick.alpha = Math.max(0, joystick.alpha - 0.02);
                       }
 
-                      // Apply Motion Translations Vector Calculations
+                      // Motion Vector Translation Mapping
+                      let moveX = 0; let moveY = 0;
                       if (joystick.active) {
                           let dx = joystick.currentX - joystick.startX;
                           let dy = joystick.currentY - joystick.startY;
                           let dist = Math.sqrt(dx * dx + dy * dy);
-                          
                           if (dist > 0) {
-                              let moveX = dx / dist;
-                              let moveY = dy / dist;
-                              let power = Math.min(dist, joystick.maxRadius) / joystick.maxRadius;
-                              
-                              let deltaX = moveX * player.speed * power;
-                              let deltaY = moveY * player.speed * power;
-                              
-                              player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x + deltaX));
-                              player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y + deltaY));
-                              distanceTraveled += Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+                              moveX = dx / dist; moveY = dy / dist;
+                              let p = Math.min(dist, joystick.maxRadius) / joystick.maxRadius;
+                              moveX *= p; moveY *= p;
                           }
+                      } else if (gameState === 'PLAYING') {
+                          if (keys['w'] || keys['arrowup']) moveY = -1;
+                          if (keys['s'] || keys['arrowdown']) moveY = 1;
+                          if (keys['a'] || keys['arrowleft']) moveX = -1;
+                          if (keys['d'] || keys['arrowright']) moveX = 1;
+                          let kDist = Math.sqrt(moveX*moveX + moveY*moveY);
+                          if (kDist > 0) { moveX /= kDist; moveY /= kDist; }
                       }
 
-                      // Automated Targeting Core Subsystem
+                      if (moveX !== 0 || moveY !== 0) {
+                          player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x + moveX * player.speed));
+                          player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y + moveY * player.speed));
+                          distanceTraveled += player.speed;
+                      }
+
                       if (gameState === 'PLAYING') {
-                          if (!waveActive && enemies.length === 0) {
-                              setTimeout(spawnWave, 1000);
-                              waveActive = true;
-                          }
+                          if (!waveActive && enemies.length === 0) { spawnWave(); }
 
                           if (enemies.length > 0) {
-                              let nearest = null;
-                              let minDist = Infinity;
+                              let nearest = null; let minDist = Infinity;
                               enemies.forEach(e => {
                                   let d = Math.sqrt((e.x - player.x)**2 + (e.y - player.y)**2);
                                   if (d < minDist) { minDist = d; nearest = e; }
                               });
-
                               if (nearest) {
                                   player.angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
                                   if (now - lastShotTime > fireRate) {
-                                      projectiles.push({
-                                          x: player.x, y: player.y,
-                                          vx: Math.cos(player.angle) * 9,
-                                          vy: Math.sin(player.angle) * 9,
-                                          radius: 4
-                                      });
+                                      projectiles.push({ x: player.x, y: player.y, vx: Math.cos(player.angle) * 8, vy: Math.sin(player.angle) * 8, radius: 4 });
                                       lastShotTime = now;
                                   }
                               }
                           }
                       } else {
-                          // Idle menu sweep spin loop rotation vector
                           player.angle += 0.01;
                       }
 
-                      // Render Player Primitive Shape Stack (Pill Capsule Chassis + Diamond)
+                      // Render Vehicle (Capsule + Diamond)
                       ctx.save();
                       ctx.translate(player.x, player.y);
                       ctx.rotate(player.angle);
-                      
-                      // Draw Capsule Pill Base Base
                       ctx.fillStyle = '#00ffcc';
-                      ctx.shadowBlur = 10;
-                      ctx.shadowColor = '#00ffcc';
+                      ctx.shadowBlur = 10; ctx.shadowColor = '#00ffcc';
                       ctx.beginPath();
-                      ctx.arc(-6, 0, player.radius - 2, Math.PI/2, -Math.PI/2);
-                      ctx.
+                      ctx.arc(-5, 0, player.radius - 2, Math.PI/2, -Math.PI/2);
+                      ctx.arc(5, 0, player.radius - 2, -Math.PI/2, Math.PI/2);
+                      ctx.closePath(); ctx.fill();
+                      ctx.rotate(-player.angle + (now * 0.002));
+                      ctx.fillStyle = '#ff007f'; ctx.shadowColor = '#ff007f';
+                      ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(5, 0); ctx.lineTo(0, 6); ctx.lineTo(-5, 0);
+                      ctx.closePath(); ctx.fill();
+                      ctx.restore();
+
+                      // Safe Array Processing to Prevent Physics Engine Freezes
+                      for (let i = projectiles.length - 1; i >= 0; i--) {
+                          let p = projectiles[i];
+                          p.x += p.vx; p.y += p.vy;
+                          ctx.fillStyle = '#ffff00'; ctx.shadowBlur = 6; ctx.shadowColor = '#ffff00';
+                          ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI*2); ctx.fill();
+
+                          if (p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
+                              projectiles.splice(i, 1);
+                              continue;
+                          }
+
+                          let removed = false;
+                          for (let j = enemies.length - 1; j >= 0; j--) {
+                              let e = enemies[j];
+                              let d = Math.sqrt((p.x - e.x)**2 + (p.y - e.y)**2);
+                              if (d < p.radius + e.radius) {
+                                  e.hp -= player.damage;
+                                  projectiles.splice(i, 1);
+                                  removed = true;
+
+                                  for(let k=0; k<2; k++) {
+                                      particles.push({ x: e.x, y: e.y, vx: (Math.random()-0.5)*4, vy: (Math.random()-0.5)*4, life: 1.0, color: '#00ffcc' });
+                                  }
+
+                                  if (e.hp <= 0) {
+                                      enemies.splice(j, 1);
+                                      kills++;
+                                      if (enemies.length === 0) { wave++; waveActive = false; }
+                                  }
+                                  break;
+                              }
+                          }
+                      }
+
+                      // Process Active Attackers
+                      enemies.forEach(e => {
+                          let edx = player.x - e.x; let edy = player.y - e.y;
+                          let edist = Math.sqrt(edx*edx + edy*edy);
+                          if (edist > 0 && gameState === 'PLAYING') {
+                              e.x += (edx / edist) * e.speed; e.y += (edy / edist) * e.speed;
+                          }
+                          ctx.fillStyle = e.type === 'CUBE' ? '#ff0055' : '#ffaa00';
+                          ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8;
+                          ctx.beginPath();
+                          if (e.type === 'CUBE') ctx.rect(e.x - e.radius, e.y - e.radius, e.radius*2, e.radius*2);
+                          else ctx.arc(e.x, e.y, e.radius, 0, Math.PI*2);
+                          ctx.fill();
+
+                          if (gameState === 'PLAYING' && edist < player.radius + e.radius) {
+                              player.currentHealth = Math.max(0, player.currentHealth - 0.4);
+                              if (player.currentHealth <= 0) triggerGameOver();
+                          }
+                      });
+
+                      // Render Burst Particles
+                      for (let i = particles.length - 1; i >= 0; i--) {
+                          let p = particles[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.04;
+                          if (p.life <= 0) { particles.splice(i, 1); continue; }
+                          ctx.fillStyle = p.color; ctx.globalAlpha = p.life; ctx.shadowBlur = 0;
+                          ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+                          ctx.globalAlpha = 1.0;
+                      }
+
+                      // Virtual Interface Handle overlay
+                      if (joystick.alpha > 0) {
+                          ctx.save(); ctx.globalAlpha = joystick.alpha; ctx.shadowBlur = 0;
+                          ctx.strokeStyle = '#00ffcc'; ctx.lineWidth = 2;
+                          ctx.beginPath(); ctx.arc(joystick.startX, joystick.startY, joystick.maxRadius, 0, Math.PI*2); ctx.stroke();
+                          let kx = joystick.currentX - joystick.startX; let ky = joystick.currentY - joystick.startY;
+                          let kd = Math.sqrt(kx*kx + ky*ky);
+                          if (kd > joystick.maxRadius) { kx = (kx/kd)*joystick.maxRadius; ky = (ky/kd)*joystick.maxRadius; }
+                          ctx.fillStyle = '#ff007f';
+                          ctx.beginPath(); ctx.arc(joystick.startX + kx, joystick.startY + ky, 14, 0, Math.PI*2); ctx.fill();
+                          ctx.restore();
+                      }
+
+                      // HUD Rendering
+                      if (gameState === 'PLAYING') {
+                          ctx.shadowBlur = 0; ctx.fillStyle = '#00ffcc'; ctx.font = 'bold 12px monospace';
+                          ctx.fillText(`WAVE: ${wave}`, 15, 25);
+                          ctx.fillText(`KILLS: ${kills}`, 15, 42);
+                          ctx.fillText(`DIST: ${Math.floor(distanceTraveled)}m`, 15, 59);
+                          let hbW = 120;
+                          ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(canvas.width - hbW - 15, 15, hbW, 12);
+                          let pct = player.currentHealth / player.maxHealth;
+                          ctx.fillStyle = pct > 0.4 ? '#00ffcc' : '#ff0055';
+                          ctx.fillRect(canvas.width - hbW - 15, 15, hbW * pct, 12);
+                          ctx.strokeStyle = '#ffffff'; ctx.strokeRect(canvas.width - hbW - 15, 15, hbW, 12);
+                      }
+                  }
+                  requestAnimationFrame(loop);
+              }
+              requestAnimationFrame(loop);
+          </script>
+          </body>
+          </html>
+          EOF
+
+      - name: Deploy Live Sandbox Package
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: build/WebGL
+          branch: gh-pages
